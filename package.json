@@ -1,0 +1,62 @@
+{
+  "name": "opencode-go-usage",
+  "version": "0.1.0",
+  "description": "OpenCode TUI plugin: OpenCode Go usage meters (5h / weekly / monthly) in the session sidebar",
+  "type": "module",
+  "license": "MIT",
+  "author": "Will Maethner",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wmaethner/opencode-go-usage.git"
+  },
+  "homepage": "https://github.com/wmaethner/opencode-go-usage#readme",
+  "bugs": {
+    "url": "https://github.com/wmaethner/opencode-go-usage/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "go",
+    "usage",
+    "quota",
+    "sidebar"
+  ],
+  "files": [
+    "src"
+  ],
+  "exports": {
+    "./tui": "./src/tui.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.30"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.4.5",
+    "@opentui/solid": ">=0.4.5",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.30",
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/node": "^24.0.0",
+    "solid-js": "1.9.12",
+    "typescript": "^5.8.2"
+  }
+}
