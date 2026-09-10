@@ -18,6 +18,14 @@ mo  94%  ███████████░  12d
 - Keeps the last known values if a refresh fails, and toasts once per failure.
 - Hides itself when OpenCode Go is not configured on this machine.
 
+> **Live updates on stable releases are limited by an upstream bug**
+> ([anomalyco/opencode#39986](https://github.com/anomalyco/opencode/issues/39986)):
+> on packaged CLI builds, plugin-owned UI does not reliably repaint. The widget
+> reads its values through the host's reactive store (`api.kv`), so it updates
+> whenever the TUI repaints (typing, model activity, session switches) and
+> always shows fresh values after a restart. Numbers may be slightly stale
+> between repaints.
+
 ## How it works
 
 OpenCode Go exposes a quota endpoint — the same one the web console uses:

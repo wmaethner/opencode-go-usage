@@ -1,6 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-import { For, type JSX } from "solid-js"
-import type { TuiPlugin, TuiPluginModule, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
+import { For, createMemo, type JSX } from "solid-js"
+import type {
+  TuiPlugin,
+  TuiPluginApi,
+  TuiPluginModule,
+  TuiThemeCurrent,
+} from "@opencode-ai/plugin/tui"
 import {
   UsageError,
   clampPercent,
@@ -15,6 +20,9 @@ const BAR_WIDTH = 12
 const DEFAULT_REFRESH_SECONDS = 60
 const MIN_REFRESH_SECONDS = 30
 
+/** Shared KV key the widget reads reactively and refresh() writes. */
+const KV_KEY = "opencode-go-usage"
+
 const WINDOW_KEYS = [
   { key: "rolling", label: "5h" },
   { key: "weekly", label: "wk" },
@@ -28,6 +36,14 @@ type WidgetState = {
   usage?: GoUsage
   fetchedAt?: number
   message?: string
+}
+
+const LOADING_STATE: WidgetState = { status: "loading" }
+
+function isWidgetState(value: unknown): value is WidgetState {
+  if (typeof value !== "object" || value === null) return false
+  const status = (value as { status?: unknown }).status
+  return status === "loading" || status === "no-key" || status === "ok" || status === "error"
 }
 
 function levelFor(percent: number | undefined): Level {
@@ -78,25 +94,32 @@ function WindowRow(props: {
 }
 
 /**
- * Stateless usage widget. A fresh element is mounted for every snapshot rather
- * than relying on reactive updates: on the packaged CLI, plugin slot
- * contributions paint once at mount and their reactive signal updates are not
- * propagated to the host renderer (anomalyco/opencode#39986). Remounting the
- * slot contribution is a fresh initial paint, which always renders.
+ * The widget derives all of its data from `api.kv`, which is backed by the
+ * host's Solid store. Reading the key inside the component subscribes it to the
+ * host's reactive graph; writing the key from refresh() triggers a repaint.
+ * This is the same mechanism the built-in sidebar plugins use via `api.state`
+ * (anomalyco/opencode#39986 makes plugin-local signals unrenderable on stable).
  */
-function UsageWidget(props: { state: WidgetState; theme: TuiThemeCurrent }): JSX.Element {
-  const usage = props.state.usage
+function UsageWidget(props: { api: TuiPluginApi }): JSX.Element {
+  const snapshot = createMemo<WidgetState>(() => {
+    const raw = props.api.kv.get(KV_KEY)
+    return isWidgetState(raw) ? raw : LOADING_STATE
+  })
+  const theme = createMemo<TuiThemeCurrent>(() => props.api.theme.current)
+
+  const state = snapshot()
+  const usage = state.usage
   const percents = [usage?.rolling?.percent, usage?.weekly?.percent, usage?.monthly?.percent].filter(
     (value): value is number => typeof value === "number",
   )
   const max = percents.length > 0 ? Math.max(...percents) : undefined
-  const overall: Level = props.state.status === "error" && !usage ? "error" : levelFor(max)
-  const dot =
-    props.state.status === "loading" ? props.theme.textMuted : colorFor(props.theme, overall)
+  const overall: Level = state.status === "error" && !usage ? "error" : levelFor(max)
+  const t = theme()
+  const dot = state.status === "loading" ? t.textMuted : colorFor(t, overall)
   const statusLine =
-    props.state.status === "error"
-      ? (props.state.message ?? "Unavailable")
-      : props.state.status === "loading"
+    state.status === "error"
+      ? (state.message ?? "Unavailable")
+      : state.status === "loading"
         ? "Loading…"
         : ""
 
@@ -104,18 +127,18 @@ function UsageWidget(props: { state: WidgetState; theme: TuiThemeCurrent }): JSX
     <box flexDirection="column">
       <box flexDirection="row" gap={1}>
         <text fg={dot}>●</text>
-        <text fg={props.theme.text}>
+        <text fg={t.text}>
           <b>Go usage</b>
         </text>
-        <text fg={props.theme.textMuted}>{formatRelative(Date.now(), props.state.fetchedAt)}</text>
+        <text fg={t.textMuted}>{formatRelative(Date.now(), state.fetchedAt)}</text>
       </box>
       <For each={WINDOW_KEYS}>
         {(window) => (
-          <WindowRow label={window.label} window={usage?.[window.key]} theme={props.theme} />
+          <WindowRow label={window.label} window={usage?.[window.key]} theme={t} />
         )}
       </For>
       {statusLine !== "" ? (
-        <text fg={props.theme.textMuted} wrapMode="none">
+        <text fg={t.textMuted} wrapMode="none">
           {statusLine}
         </text>
       ) : null}
@@ -136,30 +159,6 @@ const tui: TuiPlugin = async (api, options) => {
 
   let generation = 0
   let notified: string | null = null
-  let current: WidgetState = { status: "loading" }
-  let disposeSlot: (() => void) | undefined
-
-  /**
-   * Remount the sidebar contribution with an immutable snapshot. The host's
-   * `slots.register` is typed as returning a string id, but at runtime it
-   * returns the slot registry's unregister function; keep a no-op fallback in
-   * case that ever changes.
-   */
-  const renderWidget = (snapshot: WidgetState): void => {
-    current = snapshot
-    disposeSlot?.()
-    disposeSlot = undefined
-    if (snapshot.status === "no-key") return
-    const registered = api.slots.register({
-      order: 650,
-      slots: {
-        sidebar_content(ctx) {
-          return <UsageWidget state={snapshot} theme={ctx.theme.current} />
-        },
-      },
-    }) as unknown as (() => void) | string
-    disposeSlot = typeof registered === "function" ? registered : () => {}
-  }
 
   const refresh = async (): Promise<void> => {
     const mine = ++generation
@@ -173,7 +172,7 @@ const tui: TuiPlugin = async (api, options) => {
     if (mine !== generation) return
 
     if (!key) {
-      renderWidget({ status: "no-key" })
+      api.kv.set(KV_KEY, { status: "no-key" })
       return
     }
 
@@ -181,7 +180,7 @@ const tui: TuiPlugin = async (api, options) => {
       const usage = await fetchUsage(key.apiKey, { baseUrl: opts["baseUrl"] })
       if (mine !== generation) return
       notified = null
-      renderWidget({ status: "ok", usage, fetchedAt: Date.now() })
+      api.kv.set(KV_KEY, { status: "ok", usage, fetchedAt: Date.now() })
     } catch (error) {
       if (mine !== generation) return
       const message =
@@ -194,11 +193,26 @@ const tui: TuiPlugin = async (api, options) => {
         notified = message
         api.ui.toast({ variant: "error", title: "Go usage", message, duration: 6000 })
       }
-      renderWidget({ status: "error", message, usage: current.usage, fetchedAt: current.fetchedAt })
+      const prev = api.kv.get(KV_KEY)
+      api.kv.set(KV_KEY, {
+        status: "error",
+        message,
+        usage: isWidgetState(prev) ? prev.usage : undefined,
+        fetchedAt: isWidgetState(prev) ? prev.fetchedAt : undefined,
+      })
     }
   }
 
-  renderWidget(current)
+  api.kv.set(KV_KEY, LOADING_STATE)
+
+  api.slots.register({
+    order: 650,
+    slots: {
+      sidebar_content() {
+        return <UsageWidget api={api} />
+      },
+    },
+  })
 
   api.keymap.registerLayer({
     commands: [
@@ -218,11 +232,7 @@ const tui: TuiPlugin = async (api, options) => {
 
   void refresh()
   const timer = setInterval(() => void refresh(), refreshMs)
-  api.lifecycle.onDispose(() => {
-    clearInterval(timer)
-    disposeSlot?.()
-    disposeSlot = undefined
-  })
+  api.lifecycle.onDispose(() => clearInterval(timer))
 }
 
 const plugin: TuiPluginModule & { id: string } = {
